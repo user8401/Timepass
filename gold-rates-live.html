@@ -63,10 +63,10 @@ tr.k14 td { background:var(--gold-bg); }
   </section>
 
   <p class="note">
-    Rates come from each shop's website through a free public proxy, so they can lag or fail.
-    Both shops publish one rate for all showrooms, so this is not specific to Sangamner, and PNG's
-    web rate is marked for online purchase only. Chandukaka does not list 14K: the 14K figure is
-    estimated as 24K × 0.63. Open the sites to double-check:
+    Rates are fetched from each shop's website every hour by a GitHub job and saved in your repo,
+    so they can be up to an hour or two old. Both shops publish one rate for all showrooms, so this is
+    not specific to Sangamner, and PNG's web rate is marked for online purchase only. Chandukaka does
+    not list 14K: the 14K figure is estimated as 24K × 0.63. Open the sites to double-check:
     <a href="https://chandukakasaraf.in/todays-gold-rate/" target="_blank" rel="noopener">Chandukaka</a>,
     <a href="https://www.pngjewellers.com/pages/metal-rates" target="_blank" rel="noopener">PNG</a>.
   </p>
@@ -74,76 +74,39 @@ tr.k14 td { background:var(--gold-bg); }
 
 <script>
 (function () {
-  var SITES = {
-    c: {
-      name: 'Chandukaka',
-      url: 'https://chandukakasaraf.in/todays-gold-rate/',
-      rate: /(\d{2})\s*KT\s*Gold\s*₹\s*([\d,]+)/g,
-      updated: /Updated\s*On:?\s*([\d\-]+\s[\d:]+)/i
-    },
-    p: {
-      name: 'PNG',
-      url: 'https://www.pngjewellers.com/pages/metal-rates',
-      rate: /(\d{1,2})\s*K\s*Gold\s*₹\s*([\d,]+)/g,
-      updated: /Updated on\s*([A-Za-z]+,\s*[A-Za-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M)/i
-    }
-  };
-  var PROXIES = [
-    function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); },
-    function (u) { return 'https://corsproxy.io/?url=' + encodeURIComponent(u); },
-    function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); }
-  ];
-  var KEY = 'gold-rates-live-v1';
+  var DATA_URL = 'rates.json';
+  var KEY = 'gold-rates-live-v2';
   var KARATS = [24, 22, 18, 14];
   var data = { c: null, p: null };
   var $ = function (id) { return document.getElementById(id); };
 
   function inr(n) { return n.toLocaleString('en-IN'); }
-  function stripTags(html) {
-    return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#8377;|&#x20B9;/g, function (m) { return m === '&nbsp;' ? ' ' : '₹'; }).replace(/\s+/g, ' ');
-  }
-  function parse(html, site) {
-    var text = stripTags(html), rates = {}, m;
-    site.rate.lastIndex = 0;
-    while ((m = site.rate.exec(text)) !== null) {
-      var k = parseInt(m[1], 10);
-      if (!(k in rates)) rates[k] = parseInt(m[2].replace(/,/g, ''), 10);
-    }
-    var u = text.match(site.updated);
-    return { rates: rates, updated: u ? u[1] : 'time not shown on page' };
+
+  function setStatus(key, text, isErr) {
+    var st = $('st-' + key);
+    st.className = 'status' + (isErr ? ' err' : '');
+    st.textContent = text;
   }
 
-  function fetchWithTimeout(url, ms) {
-    var ctl = new AbortController();
-    var t = setTimeout(function () { ctl.abort(); }, ms);
-    return fetch(url, { signal: ctl.signal }).then(function (r) {
-      clearTimeout(t);
+  function load() {
+    return fetch(DATA_URL + '?t=' + Date.now(), { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
-    }, function (e) { clearTimeout(t); throw e; });
-  }
-
-  function tryProxies(site, i) {
-    if (i >= PROXIES.length) return Promise.reject(new Error('all proxies failed'));
-    return fetchWithTimeout(PROXIES[i](site.url), 12000).then(function (html) {
-      var res = parse(html, site);
-      if (!Object.keys(res.rates).length) throw new Error('no rates found on page');
-      return res;
-    }).catch(function () { return tryProxies(site, i + 1); });
-  }
-
-  function load(key) {
-    var site = SITES[key], st = $('st-' + key);
-    st.className = 'status'; st.textContent = 'Fetching…';
-    return tryProxies(site, 0).then(function (res) {
-      res.fetchedAt = new Date().toISOString();
-      data[key] = res;
-      st.textContent = 'Site says updated: ' + res.updated;
-    }).catch(function (e) {
-      st.className = 'status err';
-      st.textContent = data[key]
-        ? 'Could not refresh (' + e.message + '). Showing the last saved rates from ' + new Date(data[key].fetchedAt).toLocaleString() + '.'
-        : 'Could not fetch (' + e.message + '). Open the site link below to check the rate.';
+      return r.json();
+    }).then(function (j) {
+      var ageH = (Date.now() - new Date(j.fetchedAt).getTime()) / 36e5;
+      var fetched = new Date(j.fetchedAt).toLocaleString();
+      [['c', 'chandukaka'], ['p', 'png']].forEach(function (pair) {
+        var key = pair[0], s = j[pair[1]];
+        var has = s && s.rates && Object.keys(s.rates).length;
+        if (has) data[key] = { rates: s.rates, updated: s.updated, fetchedAt: j.fetchedAt };
+        if (!has) {
+          setStatus(key, 'No rates saved yet. Check the Actions tab in your GitHub repo.', true);
+        } else if (s.error) {
+          setStatus(key, 'Latest update failed (' + s.error + '). Showing older rates. Site said: ' + s.updated, true);
+        } else {
+          setStatus(key, 'Site says updated: ' + s.updated + '. Saved at ' + fetched + (ageH > 8 ? ' (more than 8 hours old)' : '') + '.', ageH > 8);
+        }
+      });
     });
   }
 
@@ -188,8 +151,12 @@ tr.k14 td { background:var(--gold-bg); }
 
   function refresh() {
     var btn = $('refresh');
-    btn.disabled = true; btn.textContent = 'Fetching…';
-    Promise.all([load('c'), load('p')]).then(function () {
+    btn.disabled = true; btn.textContent = 'Loading…';
+    load().catch(function (e) {
+      var msg = 'Could not load rates.json (' + e.message + '). Open this page from your GitHub Pages link, and check that the hourly update has run.';
+      setStatus('c', msg, true);
+      setStatus('p', msg, true);
+    }).then(function () {
       render(); save();
       btn.disabled = false; btn.textContent = 'Refresh rates';
     });

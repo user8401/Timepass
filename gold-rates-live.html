@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gold rates: Chandukaka vs PNG</title>
+<style>
+:root { --bg:#eef2f0; --card:#fff; --ink:#14302a; --muted:#5d7068; --line:#d3ddd8; --accent:#0f5c4d; --accent-ink:#fff;
+  --gold:#a87a12; --gold-bg:#f6ecd0; --neg:#a33a2a; --pos:#0f5c4d; --field:#f7faf8; }
+@media (prefers-color-scheme: dark) { :root {
+  --bg:#0d1a17; --card:#152622; --ink:#e4efe9; --muted:#92a89f; --line:#28403a; --accent:#4fc2a6; --accent-ink:#08201a;
+  --gold:#e2b94a; --gold-bg:#2b2410; --neg:#ef8f7e; --pos:#4fc2a6; --field:#0f1e1b; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size:16px; line-height:1.45; }
+main { max-width:560px; margin:0 auto; padding:18px 14px 40px; }
+h1 { font-size:1.35rem; margin:6px 0 4px; font-weight:600; }
+.sub { color:var(--muted); font-size:.88rem; margin:0 0 14px; }
+button.go { width:100%; font:inherit; font-weight:600; font-size:1.05rem; padding:13px; border:0; border-radius:10px; background:var(--accent); color:var(--accent-ink); cursor:pointer; margin-bottom:14px; }
+button.go:disabled { opacity:.6; }
+button:focus-visible, a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+.card h2 { font-size:1rem; margin:0 0 4px; font-weight:600; }
+.status { font-size:.82rem; color:var(--muted); margin:0; }
+.status.err { color:var(--neg); }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:.95rem; }
+th, td { padding:9px 6px; border-bottom:1px solid var(--line); text-align:right; }
+th:first-child, td:first-child { text-align:left; }
+th { font-weight:500; color:var(--muted); font-size:.8rem; }
+td { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+td:first-child { font-family:inherit; font-weight:600; }
+tr.k14 td { background:var(--gold-bg); }
+.est { color:var(--muted); font-size:.75rem; font-family:inherit; }
+.diff { font-size:.85rem; margin-top:10px; }
+.note { font-size:.8rem; color:var(--muted); }
+.note a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gold rates today</h1>
+  <p class="sub">Chandukaka Saraf and PNG Jewellers, per gram.</p>
+
+  <button class="go" id="refresh" type="button">Refresh rates</button>
+
+  <section class="card" aria-live="polite">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Purity</th><th>Chandukaka</th><th>PNG</th><th>Difference</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="4" class="est">Fetching…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="diff" id="diff"></p>
+  </section>
+
+  <section class="card">
+    <h2>Chandukaka Saraf</h2>
+    <p class="status" id="st-c">Waiting…</p>
+  </section>
+  <section class="card">
+    <h2>PNG Jewellers</h2>
+    <p class="status" id="st-p">Waiting…</p>
+  </section>
+
+  <p class="note">
+    Rates come from each shop's website through a free public proxy, so they can lag or fail.
+    Both shops publish one rate for all showrooms, so this is not specific to Sangamner, and PNG's
+    web rate is marked for online purchase only. Chandukaka does not list 14K: the 14K figure is
+    estimated as 24K × 0.63. Open the sites to double-check:
+    <a href="https://chandukakasaraf.in/todays-gold-rate/" target="_blank" rel="noopener">Chandukaka</a>,
+    <a href="https://www.pngjewellers.com/pages/metal-rates" target="_blank" rel="noopener">PNG</a>.
+  </p>
+</main>
+
+<script>
+(function () {
+  var SITES = {
+    c: {
+      name: 'Chandukaka',
+      url: 'https://chandukakasaraf.in/todays-gold-rate/',
+      rate: /(\d{2})\s*KT\s*Gold\s*₹\s*([\d,]+)/g,
+      updated: /Updated\s*On:?\s*([\d\-]+\s[\d:]+)/i
+    },
+    p: {
+      name: 'PNG',
+      url: 'https://www.pngjewellers.com/pages/metal-rates',
+      rate: /(\d{1,2})\s*K\s*Gold\s*₹\s*([\d,]+)/g,
+      updated: /Updated on\s*([A-Za-z]+,\s*[A-Za-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M)/i
+    }
+  };
+  var PROXIES = [
+    function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); },
+    function (u) { return 'https://corsproxy.io/?url=' + encodeURIComponent(u); },
+    function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); }
+  ];
+  var KEY = 'gold-rates-live-v1';
+  var KARATS = [24, 22, 18, 14];
+  var data = { c: null, p: null };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function inr(n) { return n.toLocaleString('en-IN'); }
+  function stripTags(html) {
+    return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#8377;|&#x20B9;/g, function (m) { return m === '&nbsp;' ? ' ' : '₹'; }).replace(/\s+/g, ' ');
+  }
+  function parse(html, site) {
+    var text = stripTags(html), rates = {}, m;
+    site.rate.lastIndex = 0;
+    while ((m = site.rate.exec(text)) !== null) {
+      var k = parseInt(m[1], 10);
+      if (!(k in rates)) rates[k] = parseInt(m[2].replace(/,/g, ''), 10);
+    }
+    var u = text.match(site.updated);
+    return { rates: rates, updated: u ? u[1] : 'time not shown on page' };
+  }
+
+  function fetchWithTimeout(url, ms) {
+    var ctl = new AbortController();
+    var t = setTimeout(function () { ctl.abort(); }, ms);
+    return fetch(url, { signal: ctl.signal }).then(function (r) {
+      clearTimeout(t);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }, function (e) { clearTimeout(t); throw e; });
+  }
+
+  function tryProxies(site, i) {
+    if (i >= PROXIES.length) return Promise.reject(new Error('all proxies failed'));
+    return fetchWithTimeout(PROXIES[i](site.url), 12000).then(function (html) {
+      var res = parse(html, site);
+      if (!Object.keys(res.rates).length) throw new Error('no rates found on page');
+      return res;
+    }).catch(function () { return tryProxies(site, i + 1); });
+  }
+
+  function load(key) {
+    var site = SITES[key], st = $('st-' + key);
+    st.className = 'status'; st.textContent = 'Fetching…';
+    return tryProxies(site, 0).then(function (res) {
+      res.fetchedAt = new Date().toISOString();
+      data[key] = res;
+      st.textContent = 'Site says updated: ' + res.updated;
+    }).catch(function (e) {
+      st.className = 'status err';
+      st.textContent = data[key]
+        ? 'Could not refresh (' + e.message + '). Showing the last saved rates from ' + new Date(data[key].fetchedAt).toLocaleString() + '.'
+        : 'Could not fetch (' + e.message + '). Open the site link below to check the rate.';
+    });
+  }
+
+  function rateOf(key, k) {
+    var d = data[key];
+    if (!d) return null;
+    if (k in d.rates) return { v: d.rates[k], est: false };
+    if (key === 'c' && k === 14 && 24 in d.rates) return { v: Math.round(d.rates[24] * 0.63), est: true };
+    return null;
+  }
+
+  function render() {
+    var html = '';
+    KARATS.forEach(function (k) {
+      var c = rateOf('c', k), p = rateOf('p', k), diff = '—';
+      if (c && p) {
+        var d = p.v - c.v;
+        diff = (d > 0 ? '+' : d < 0 ? '−' : '') + '₹' + inr(Math.abs(d));
+      }
+      function cell(r) { return r ? '₹' + inr(r.v) + (r.est ? '<br><span class="est">estimate</span>' : '') : '—'; }
+      html += '<tr' + (k === 14 ? ' class="k14"' : '') + '><td>' + k + 'K</td><td>' + cell(c) + '</td><td>' + cell(p) + '</td><td>' + diff + '</td></tr>';
+    });
+    $('rows').innerHTML = html;
+
+    var c14 = rateOf('c', 14), p14 = rateOf('p', 14);
+    if (c14 && p14) {
+      var d = p14.v - c14.v, pct = Math.abs(d) / c14.v * 100;
+      $('diff').textContent = '14K: PNG is ₹' + inr(Math.abs(d)) + ' ' + (d >= 0 ? 'higher' : 'lower') +
+        ' than Chandukaka (' + pct.toFixed(2) + '%) before making charges. Difference column = PNG minus Chandukaka.';
+    } else {
+      $('diff').textContent = '';
+    }
+  }
+
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {} }
+  function restore() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (raw) { var d = JSON.parse(raw); data.c = d.c || null; data.p = d.p || null; }
+    } catch (e) {}
+  }
+
+  function refresh() {
+    var btn = $('refresh');
+    btn.disabled = true; btn.textContent = 'Fetching…';
+    Promise.all([load('c'), load('p')]).then(function () {
+      render(); save();
+      btn.disabled = false; btn.textContent = 'Refresh rates';
+    });
+  }
+
+  $('refresh').addEventListener('click', refresh);
+  restore();
+  render();
+  refresh();
+})();
+</script>
+</body>
+</html>

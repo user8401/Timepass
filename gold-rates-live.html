@@ -32,6 +32,8 @@ td:first-child { font-family:inherit; font-weight:600; }
 tr.k14 td { background:var(--gold-bg); }
 .est { color:var(--muted); font-size:.75rem; font-family:inherit; }
 .diff { font-size:.85rem; margin-top:10px; }
+.src input { width:100%; font:inherit; font-size:.9rem; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--field); color:var(--ink); margin:8px 0; }
+.src button { font:inherit; padding:9px 14px; border:1px solid var(--accent); border-radius:8px; background:transparent; color:var(--accent); cursor:pointer; }
 .note { font-size:.8rem; color:var(--muted); }
 .note a { color:var(--accent); }
 </style>
@@ -62,9 +64,15 @@ tr.k14 td { background:var(--gold-bg); }
     <p class="status" id="st-p">Waiting…</p>
   </section>
 
+  <section class="card src">
+    <h2>Live source</h2>
+    <p class="status" id="srcInfo"></p>
+    <input id="srcUrl" type="url" inputmode="url" placeholder="https://gold-rates.yourname.workers.dev" autocomplete="off">
+    <button type="button" id="srcSave">Save link</button>
+  </section>
+
   <p class="note">
-    Rates are fetched from each shop's website every hour by a GitHub job and saved in your repo,
-    so they can be up to an hour or two old. Both shops publish one rate for all showrooms, so this is
+    Rates are fetched from each shop's website when you tap Refresh, through your own Cloudflare relay. Both shops publish one rate for all showrooms, so this is
     not specific to Sangamner, and PNG's web rate is marked for online purchase only. Chandukaka does
     not list 14K: the 14K figure is estimated as 24K × 0.63. Open the sites to double-check:
     <a href="https://chandukakasaraf.in/todays-gold-rate/" target="_blank" rel="noopener">Chandukaka</a>,
@@ -75,6 +83,8 @@ tr.k14 td { background:var(--gold-bg); }
 <script>
 (function () {
   var DATA_URL = 'rates.json';
+  var SRC_KEY = 'gold-rates-source';
+  function getSrc() { try { return localStorage.getItem(SRC_KEY) || ''; } catch (e) { return ''; } }
   var KEY = 'gold-rates-live-v2';
   var KARATS = [24, 22, 18, 14];
   var data = { c: null, p: null };
@@ -89,7 +99,8 @@ tr.k14 td { background:var(--gold-bg); }
   }
 
   function load() {
-    return fetch(DATA_URL + '?t=' + Date.now(), { cache: 'no-store' }).then(function (r) {
+    var base = getSrc() || DATA_URL;
+    return fetch(base + (base.indexOf('?') > -1 ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function (j) {
@@ -100,11 +111,11 @@ tr.k14 td { background:var(--gold-bg); }
         var has = s && s.rates && Object.keys(s.rates).length;
         if (has) data[key] = { rates: s.rates, updated: s.updated, fetchedAt: j.fetchedAt };
         if (!has) {
-          setStatus(key, 'No rates saved yet. Check the Actions tab in your GitHub repo.', true);
+          setStatus(key, 'No rates came back from the live source.', true);
         } else if (s.error) {
           setStatus(key, 'Latest update failed (' + s.error + '). Showing older rates. Site said: ' + s.updated, true);
         } else {
-          setStatus(key, 'Site says updated: ' + s.updated + '. Saved at ' + fetched + (ageH > 8 ? ' (more than 8 hours old)' : '') + '.', ageH > 8);
+          setStatus(key, 'Site says updated: ' + s.updated + '. Fetched at ' + fetched + (ageH > 8 ? ' (more than 8 hours old)' : '') + '.', ageH > 8);
         }
       });
     });
@@ -153,7 +164,7 @@ tr.k14 td { background:var(--gold-bg); }
     var btn = $('refresh');
     btn.disabled = true; btn.textContent = 'Loading…';
     load().catch(function (e) {
-      var msg = 'Could not load rates.json (' + e.message + '). Open this page from your GitHub Pages link, and check that the hourly update has run.';
+      var msg = 'Could not load rates (' + e.message + '). ' + (getSrc() ? 'Check the saved link under Live source.' : 'Paste your Cloudflare link under Live source first.');
       setStatus('c', msg, true);
       setStatus('p', msg, true);
     }).then(function () {
@@ -162,7 +173,18 @@ tr.k14 td { background:var(--gold-bg); }
     });
   }
 
+  function showSrc() {
+    var v = getSrc();
+    $('srcUrl').value = v;
+    $('srcInfo').textContent = v ? 'Fetching live from your link each time you tap Refresh.' : 'Paste the link of your Cloudflare relay and tap Save.';
+  }
+  $('srcSave').addEventListener('click', function () {
+    var v = $('srcUrl').value.trim();
+    try { if (v) localStorage.setItem(SRC_KEY, v); else localStorage.removeItem(SRC_KEY); } catch (e) {}
+    showSrc(); refresh();
+  });
   $('refresh').addEventListener('click', refresh);
+  showSrc();
   restore();
   render();
   refresh();
